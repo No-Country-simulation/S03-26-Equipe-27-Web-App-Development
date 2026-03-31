@@ -1,18 +1,19 @@
 package com.smarttrafficflow.backend.domain.streets.service;
 
+import com.smarttrafficflow.backend.api.dto.StreetSearchResponse;
 import com.smarttrafficflow.backend.api.dto.StreetResponse;
 import com.smarttrafficflow.backend.domain.streets.entity.Street;
 import com.smarttrafficflow.backend.domain.streets.repository.StreetRepository;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.Random;
 
 @Service
 public class StreetService {
 
     private final StreetRepository streetRepository;
-    private final Random random = new Random();
+    private static final int DEFAULT_LIMIT = 20;
+    private static final int MAX_LIMIT = 50;
 
     public StreetService(StreetRepository streetRepository) {
         this.streetRepository = streetRepository;
@@ -30,16 +31,39 @@ public class StreetService {
                 .orElseThrow(() -> new IllegalArgumentException("streetOsmWayId invalido: " + osmWayId));
     }
 
-    public Long getRandomStreetOsmWayId() {
-        List<Long> osmWayIds = streetRepository.findAll()
-                .stream()
-                .map(Street::getOsmWayId)
-                .toList();
+    public StreetSearchResponse search(String query, Integer limit, Integer offset) {
+        String normalizedQuery = query == null ? "" : query.trim();
+        int normalizedLimit = normalizeLimit(limit);
+        int normalizedOffset = normalizeOffset(offset);
 
-        if (osmWayIds.isEmpty()) {
+        List<StreetResponse> items = streetRepository.searchByName(normalizedQuery, normalizedLimit, normalizedOffset)
+                .stream()
+                .map(street -> new StreetResponse(street.getId(), street.getOsmWayId(), street.getName()))
+                .toList();
+        long total = streetRepository.countByNameFilter(normalizedQuery);
+
+        return new StreetSearchResponse(items, normalizedLimit, normalizedOffset, total);
+    }
+
+    public Long getRandomStreetOsmWayId() {
+        Long osmWayId = streetRepository.findRandomOsmWayId();
+        if (osmWayId == null) {
             throw new IllegalStateException("Nenhuma rua real importada. Importe GeoJSON antes de simular.");
         }
+        return osmWayId;
+    }
 
-        return osmWayIds.get(random.nextInt(osmWayIds.size()));
+    private int normalizeLimit(Integer limit) {
+        if (limit == null || limit <= 0) {
+            return DEFAULT_LIMIT;
+        }
+        return Math.min(limit, MAX_LIMIT);
+    }
+
+    private int normalizeOffset(Integer offset) {
+        if (offset == null || offset < 0) {
+            return 0;
+        }
+        return offset;
     }
 }

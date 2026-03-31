@@ -2,6 +2,7 @@ import type {
   CreateTrafficRecordRequest,
   MapFeatureCollection,
   SimulationRequest,
+  StreetSearchResponse,
   StreetOption,
   TrafficInsightResponse,
   TrafficRecord,
@@ -111,6 +112,15 @@ export function getTrafficMap(recordIds: string[]) {
 
 export function getStreets() {
   return request<StreetOption[]>("/streets");
+}
+
+export function searchStreets(query: string, limit = 20, offset = 0) {
+  const params = new URLSearchParams({
+    q: query,
+    limit: String(limit),
+    offset: String(offset)
+  });
+  return request<StreetSearchResponse>(`/streets/search?${params.toString()}`);
 }
 
 export async function getExport(format: "csv" | "json"): Promise<Blob> {

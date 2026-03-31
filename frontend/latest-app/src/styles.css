@@ -622,6 +622,31 @@ button {
   line-height: 1.5;
 }
 
+.street-search-results {
+  display: grid;
+  gap: 6px;
+  max-height: 210px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid rgba(18, 60, 99, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.street-search-results__item {
+  text-align: left;
+  border: 1px solid rgba(18, 60, 99, 0.1);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink);
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.street-search-results__item:hover {
+  background: rgba(242, 92, 58, 0.1);
+}
+
 .table-card {
   background:
     linear-gradient(180deg, rgba(255, 251, 246, 0.97), rgba(243, 235, 225, 0.94)),
@@ -657,6 +682,12 @@ button {
 .table-selection-count {
   font-size: 0.9rem;
   color: var(--muted);
+}
+
+.table-selection-note {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.92rem;
 }
 
 table {

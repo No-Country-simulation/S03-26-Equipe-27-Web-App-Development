@@ -62,3 +62,10 @@ export interface StreetOption {
   osmWayId: number;
   name: string;
 }
+
+export interface StreetSearchResponse {
+  items: StreetOption[];
+  limit: number;
+  offset: number;
+  total: number;
+}

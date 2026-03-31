@@ -8,7 +8,7 @@ import {
   createTrafficRecord,
   generateSimulation,
   getExport,
-  getStreets,
+  searchStreets,
   getTrafficInsights,
   getTrafficMap,
   getTrafficRecords,
@@ -19,7 +19,6 @@ import type {
   MapFeatureCollection,
   MapPoint,
   SimulationRequest,
-  StreetOption,
   TrafficInsightResponse,
   TrafficRecord,
   TrafficStatsResponse
@@ -139,6 +138,14 @@ function getLatestTimestamp(records: TrafficRecord[]) {
 
   const latest = [...records].sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
   return formatDateTime(latest.timestamp);
+}
+
+function areSameSelection(left: string[], right: string[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const leftSet = new Set(left);
+  return right.every((id) => leftSet.has(id));
 }
 
 function ChartCard({ eyebrow, title, tone, stats, chart }: ChartCardProps) {
@@ -266,8 +273,11 @@ export default function App() {
     insights: emptyInsights,
     mapData: { type: "FeatureCollection", features: [] }
   });
-  const [streets, setStreets] = useState<StreetOption[]>([]);
-  const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([]);
+  const [appliedRecordIds, setAppliedRecordIds] = useState<string[]>([]);
+  const [stagedRecordIds, setStagedRecordIds] = useState<string[]>([]);
+  const [streetQuery, setStreetQuery] = useState("");
+  const [streetOptions, setStreetOptions] = useState<{ id: string; osmWayId: number; name: string }[]>([]);
+  const [streetSearchLoading, setStreetSearchLoading] = useState(false);
   const [recordForm, setRecordForm] = useState<CreateTrafficRecordRequest>(recordTemplate);
   const [simulationForm, setSimulationForm] = useState<SimulationRequest>(simulationTemplate);
   const [tableQuery, setTableQuery] = useState("");
@@ -277,8 +287,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ViewMode>("home");
   const deferredQuery = useDeferredValue(tableQuery);
+  const deferredStreetQuery = useDeferredValue(streetQuery);
 
-  async function refreshDashboard(recordIds: string[] = selectedRecordIds) {
+  async function refreshDashboard(recordIds: string[] = appliedRecordIds) {
     setLoading(true);
     setError(null);
 
@@ -308,21 +319,43 @@ export default function App() {
   }
 
   useEffect(() => {
-    void (async () => {
-      try {
-        const loadedStreets = await getStreets();
-        setStreets(loadedStreets);
-        setRecordForm((current) => ({
-          ...current,
-          streetOsmWayId: current.streetOsmWayId || loadedStreets[0]?.osmWayId || 0
-        }));
-      } catch (caughtError) {
-        const message = caughtError instanceof ApiError ? caughtError.message : "Não foi possível carregar as ruas.";
-        setError(message);
-      }
-      await refreshDashboard([]);
-    })();
+    void refreshDashboard([]);
   }, []);
+
+  useEffect(() => {
+    const query = deferredStreetQuery.trim();
+    if (query.length < 2) {
+      setStreetOptions([]);
+      setStreetSearchLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      setStreetSearchLoading(true);
+      void (async () => {
+        try {
+          const response = await searchStreets(query, 20, 0);
+          if (!cancelled) {
+            setStreetOptions(response.items);
+          }
+        } catch {
+          if (!cancelled) {
+            setStreetOptions([]);
+          }
+        } finally {
+          if (!cancelled) {
+            setStreetSearchLoading(false);
+          }
+        }
+      })();
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [deferredStreetQuery]);
 
   async function handleRecordSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -380,37 +413,43 @@ export default function App() {
     }
   }
 
-  async function applySelection(nextIds: string[]) {
-    setSelectedRecordIds(nextIds);
-    await refreshDashboard(nextIds);
+  async function applySelection() {
+    setAppliedRecordIds(stagedRecordIds);
+    await refreshDashboard(stagedRecordIds);
   }
 
   function isRecordSelected(recordId: string) {
-    return selectedRecordIds.includes(recordId);
+    return stagedRecordIds.includes(recordId);
   }
 
-  async function toggleRecordSelection(recordId: string) {
-    const nextIds = isRecordSelected(recordId)
-      ? selectedRecordIds.filter((id) => id !== recordId)
-      : [...selectedRecordIds, recordId];
-    await applySelection(nextIds);
+  function toggleRecordSelection(recordId: string) {
+    setStagedRecordIds((current) =>
+      current.includes(recordId) ? current.filter((id) => id !== recordId) : [...current, recordId]
+    );
   }
 
-  async function toggleAllFilteredSelection() {
+  function toggleAllFilteredSelection() {
     const filteredIds = filteredRecords.map((record) => record.id);
     if (filteredIds.length === 0) {
       return;
     }
 
-    const allSelected = filteredIds.every((id) => selectedRecordIds.includes(id));
-    const nextIds = allSelected
-      ? selectedRecordIds.filter((id) => !filteredIds.includes(id))
-      : Array.from(new Set([...selectedRecordIds, ...filteredIds]));
-    await applySelection(nextIds);
+    setStagedRecordIds((current) => {
+      const allSelected = filteredIds.every((id) => current.includes(id));
+      return allSelected
+        ? current.filter((id) => !filteredIds.includes(id))
+        : Array.from(new Set([...current, ...filteredIds]));
+    });
   }
 
-  async function clearSelection() {
-    await applySelection([]);
+  function clearSelection() {
+    setStagedRecordIds([]);
+  }
+
+  function selectStreetOption(osmWayId: number, name: string) {
+    setRecordForm((current) => ({ ...current, streetOsmWayId: osmWayId }));
+    setStreetQuery(name);
+    setStreetOptions([]);
   }
 
   const filteredRecords = dashboard.records.filter((record) => {
@@ -425,13 +464,14 @@ export default function App() {
   });
 
   const selectedRecords =
-    selectedRecordIds.length === 0
+    appliedRecordIds.length === 0
       ? dashboard.records
-      : dashboard.records.filter((record) => selectedRecordIds.includes(record.id));
+      : dashboard.records.filter((record) => appliedRecordIds.includes(record.id));
   const analyticsContextLabel =
-    selectedRecordIds.length === 0
+    appliedRecordIds.length === 0
       ? "Visualizando base completa."
-      : `Visualizando ${selectedRecordIds.length} registros selecionados.`;
+      : `Visualizando ${appliedRecordIds.length} registros selecionados.`;
+  const hasPendingSelectionChanges = !areSameSelection(stagedRecordIds, appliedRecordIds);
 
   const summaryCards = [
     {
@@ -666,22 +706,35 @@ export default function App() {
                   </label>
                   <label>
                     Rua
-                    <select
-                      value={recordForm.streetOsmWayId}
-                      onChange={(event) =>
-                        setRecordForm((current) => ({ ...current, streetOsmWayId: Number(event.target.value) }))
-                      }
-                    >
-                      {streets.length === 0 ? (
-                        <option value={0}>Nenhuma rua cadastrada</option>
-                      ) : (
-                        streets.map((street) => (
-                          <option key={street.id} value={street.osmWayId}>
+                    <input
+                      type="search"
+                      value={streetQuery}
+                      onChange={(event) => {
+                        setStreetQuery(event.target.value);
+                        setRecordForm((current) => ({ ...current, streetOsmWayId: 0 }));
+                      }}
+                      placeholder="Digite pelo menos 2 letras para buscar"
+                    />
+                    {streetSearchLoading ? <p className="form-hint">Buscando ruas...</p> : null}
+                    {streetOptions.length > 0 ? (
+                      <div className="street-search-results">
+                        {streetOptions.map((street) => (
+                          <button
+                            key={street.id}
+                            type="button"
+                            className="street-search-results__item"
+                            onClick={() => selectStreetOption(street.osmWayId, street.name)}
+                          >
                             {street.name}
-                          </option>
-                        ))
-                      )}
-                    </select>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    <p className="form-hint">
+                      {recordForm.streetOsmWayId
+                        ? `Rua selecionada (OSM): ${recordForm.streetOsmWayId}`
+                        : "Nenhuma rua selecionada ainda."}
+                    </p>
                   </label>
                   <label>
                     Tipo de evento
@@ -708,16 +761,10 @@ export default function App() {
                   <button
                     type="submit"
                     className="primary-button"
-                    disabled={busyAction === "record" || streets.length === 0 || !recordForm.streetOsmWayId}
+                    disabled={busyAction === "record" || !recordForm.streetOsmWayId}
                   >
                     {busyAction === "record" ? "Salvando registro..." : "Salvar registro"}
                   </button>
-                  {streets.length === 0 ? (
-                    <p className="form-hint">
-                      Nenhuma rua importada ainda. Configure `APP_STREETS_IMPORT_ENABLED=true` e
-                      `APP_STREETS_IMPORT_GEOJSON_PATH` no backend.
-                    </p>
-                  ) : null}
                 </form>
               </section>
 
@@ -759,15 +806,10 @@ export default function App() {
                   <button
                     type="submit"
                     className="ghost-button ghost-button--dark"
-                    disabled={busyAction === "simulation" || streets.length === 0}
+                    disabled={busyAction === "simulation"}
                   >
                     {busyAction === "simulation" ? "Gerando..." : "Executar simulação"}
                   </button>
-                  {streets.length === 0 ? (
-                    <p className="form-hint">
-                      A simulação requer ruas reais importadas no banco antes da execução.
-                    </p>
-                  ) : null}
                 </form>
               </section>
             </section>
@@ -797,19 +839,32 @@ export default function App() {
               </div>
 
               <div className="table-actions">
-                <button type="button" className="ghost-button" onClick={() => void toggleAllFilteredSelection()}>
+                <button type="button" className="ghost-button" onClick={toggleAllFilteredSelection}>
                   Selecionar/limpar filtrados
                 </button>
                 <button
                   type="button"
                   className="ghost-button"
-                  onClick={() => void clearSelection()}
-                  disabled={selectedRecordIds.length === 0}
+                  onClick={clearSelection}
+                  disabled={stagedRecordIds.length === 0}
                 >
                   Limpar seleção
                 </button>
-                <span className="table-selection-count">{selectedRecordIds.length} selecionado(s)</span>
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => void applySelection()}
+                  disabled={!hasPendingSelectionChanges}
+                >
+                  Aplicar seleção
+                </button>
+                <span className="table-selection-count">
+                  {stagedRecordIds.length} selecionado(s), {appliedRecordIds.length} aplicado(s)
+                </span>
               </div>
+              {hasPendingSelectionChanges ? (
+                <p className="table-selection-note">Há mudanças pendentes. Clique em “Aplicar seleção”.</p>
+              ) : null}
 
               <div className="table-scroll">
                 <table>
@@ -838,7 +893,7 @@ export default function App() {
                             <input
                               type="checkbox"
                               checked={isRecordSelected(record.id)}
-                              onChange={() => void toggleRecordSelection(record.id)}
+                              onChange={() => toggleRecordSelection(record.id)}
                               aria-label={`Selecionar registro ${record.id}`}
                             />
                           </td>
