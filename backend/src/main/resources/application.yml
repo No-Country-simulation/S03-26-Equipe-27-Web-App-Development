@@ -7,9 +7,6 @@ spring:
     hibernate:
       ddl-auto: validate
     open-in-view: false
-    properties:
-      hibernate:
-        format_sql: true
   flyway:
     enabled: true
 
@@ -22,4 +19,4 @@ springdoc:
 
 app:
   cors:
-    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS}
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173}

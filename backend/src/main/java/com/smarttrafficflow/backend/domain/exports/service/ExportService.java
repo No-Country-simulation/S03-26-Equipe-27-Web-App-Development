@@ -22,26 +22,33 @@ public class ExportService {
     public String exportCsv() {
         List<TrafficRecordResponse> records = trafficRecordService.findAll();
         log.info("Exporting {} records to CSV", records.size());
+
         StringBuilder sb = new StringBuilder();
         sb.append("id,timestamp,roadType,vehicleVolume,eventType,weather,region\n");
 
         for (TrafficRecordResponse record : records) {
-            sb.append(record.id()).append(',')
-                    .append(record.timestamp()).append(',')
-                    .append(record.roadType()).append(',')
+            sb.append(escapeCsv(record.id().toString())).append(',')
+                    .append(escapeCsv(record.timestamp().toString())).append(',')
+                    .append(escapeCsv(record.roadType())).append(',')
                     .append(record.vehicleVolume()).append(',')
-                    .append(safe(record.eventType())).append(',')
-                    .append(safe(record.weather())).append(',')
-                    .append(safe(record.region()))
+                    .append(escapeCsv(record.eventType())).append(',')
+                    .append(escapeCsv(record.weather())).append(',')
+                    .append(escapeCsv(record.region()))
                     .append('\n');
         }
 
-        String csv = sb.toString();
-        log.debug("CSV export built with {} characters", csv.length());
-        return csv;
+        return sb.toString();
     }
 
-    private String safe(String value) {
-        return value == null ? "" : value;
+    private String escapeCsv(String value) {
+        if (value == null) return "";
+        boolean needsQuoting = value.contains(",")
+                || value.contains("\"")
+                || value.contains("\n")
+                || value.contains("\r");
+        if (needsQuoting) {
+            return "\"" + value.replace("\"", "\"\"") + "\"";
+        }
+        return value;
     }
 }

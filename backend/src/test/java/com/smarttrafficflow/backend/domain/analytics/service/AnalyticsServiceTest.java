@@ -1,6 +1,7 @@
 package com.smarttrafficflow.backend.domain.analytics.service;
 
 import com.smarttrafficflow.backend.api.dto.TrafficStatsResponse;
+import com.smarttrafficflow.backend.domain.analytics.AnalyticsService;
 import com.smarttrafficflow.backend.domain.trafficrecords.entity.TrafficRecord;
 import com.smarttrafficflow.backend.domain.trafficrecords.service.TrafficRecordService;
 import org.junit.jupiter.api.DisplayName;
