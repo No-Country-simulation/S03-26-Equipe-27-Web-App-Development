@@ -1,4 +1,4 @@
-export type RoadType = "LOCAL" | "ARTERIAL" | "HIGHWAY" | string;
+export type RoadType = "LOCAL" | "ARTERIAL" | "HIGHWAY";
 
 export interface TrafficRecord {
   id: string;
@@ -12,7 +12,7 @@ export interface TrafficRecord {
 
 export interface CreateTrafficRecordRequest {
   timestamp: string;
-  roadType: string;
+  roadType: RoadType;
   vehicleVolume: number;
   eventType: string;
   weather: string;
