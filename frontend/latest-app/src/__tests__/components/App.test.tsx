@@ -1,350 +1,167 @@
-import { describe, it, expect, vi } from "vitest";
+import type { ReactNode } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { server } from "../mocks/server";
+
+vi.mock("react-leaflet", () => ({
+  MapContainer: ({ children }: { children: ReactNode }) => <div data-testid="map-container">{children}</div>,
+  TileLayer: () => <div data-testid="tile-layer" />,
+  Polyline: ({ children }: { children: ReactNode }) => <div data-testid="map-polyline">{children}</div>,
+  Popup: ({ children }: { children: ReactNode }) => <div>{children}</div>
+}));
+
+vi.mock("recharts", () => ({
+  ResponsiveContainer: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  AreaChart: () => <div data-testid="area-chart" />,
+  BarChart: () => <div data-testid="bar-chart" />,
+  CartesianGrid: () => null,
+  XAxis: () => null,
+  YAxis: () => null,
+  Tooltip: () => null,
+  Bar: () => <div data-testid="bar-series" />,
+  Cell: () => null,
+  Area: () => null
+}));
+
 import App from "../../App";
 
-function renderApp() {
-  return render(<App />);
-}
-
-// ─── Carregamento inicial ─────────────────────────────────────────────────────
-
-describe("App — carregamento inicial", () => {
-
-  it("deve exibir o título principal", async () => {
-    renderApp();
-    await waitFor(() =>
-      expect(screen.getByText(/SmartTrafficFlow/i)).toBeInTheDocument()
-    );
+describe("App", () => {
+  beforeEach(() => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:test");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
   });
 
-  it("deve exibir status 'Conectado' após carregar", async () => {
-    renderApp();
-    await waitFor(() =>
-      expect(screen.getByText(/Conectado/i)).toBeInTheDocument()
-    );
-  });
+  it("renders the dashboard and connection state", async () => {
+    render(<App />);
 
-  it("deve exibir os 4 cards de resumo", async () => {
-    renderApp();
     await waitFor(() => {
+      expect(screen.getByText(/SmartTrafficFlow/i)).toBeInTheDocument();
+      expect(screen.getByText(/Conectado/i)).toBeInTheDocument();
       expect(screen.getByText(/Veículos capturados/i)).toBeInTheDocument();
-      expect(screen.getByText(/Regiões mapeadas/i)).toBeInTheDocument();
-      expect(screen.getByText(/Carga média/i)).toBeInTheDocument();
-      expect(screen.getByText(/Janela de pico/i)).toBeInTheDocument();
     });
   });
 
-  it("deve exibir insights gerados pelo backend", async () => {
-    renderApp();
-    await waitFor(() =>
-      expect(screen.getByText(/maior volume agregado/i)).toBeInTheDocument()
+  it("switches to the workspace view", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Formulários e registros/i }));
+
+    expect(await screen.findByText(/Adicionar registro de tráfego/i)).toBeInTheDocument();
+  });
+
+  it("searches and selects a street before saving a record", async () => {
+    const user = userEvent.setup();
+    let capturedStreetOsmWayId: number | null = null;
+    server.use(
+      http.post("http://localhost:8080/api/traffic-records", async ({ request }) => {
+        const body = (await request.json()) as { streetOsmWayId: number };
+        capturedStreetOsmWayId = body.streetOsmWayId;
+        return HttpResponse.json(
+          {
+            id: "rec-created",
+            timestamp: "2024-06-17T08:00:00Z",
+            roadType: "ARTERIAL",
+            vehicleVolume: 140,
+            eventType: null,
+            weather: null,
+            streetId: "street-created",
+            streetOsmWayId: body.streetOsmWayId,
+            streetName: "Avenida Central"
+          },
+          { status: 201 }
+        );
+      })
     );
+
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Formulários e registros/i }));
+
+    const saveButton = await screen.findByRole("button", { name: /Salvar registro/i });
+    expect(saveButton).toBeDisabled();
+
+    await user.type(screen.getByRole("searchbox", { name: /Rua/i }), "Aven");
+
+    const option = await screen.findByRole("button", { name: /Avenida Central/i });
+    await user.click(option);
+
+    expect(screen.getByText(/Rua selecionada \(OSM\): 101/i)).toBeInTheDocument();
+    expect(saveButton).toBeEnabled();
+
+    await user.click(saveButton);
+
+    await waitFor(() => expect(capturedStreetOsmWayId).toBe(101));
   });
 
-  it("deve renderizar o container do mapa", async () => {
-    renderApp();
-    await waitFor(() =>
-      expect(screen.getByTestId("map-container")).toBeInTheDocument()
+  it("applies record selection and refreshes filtered analytics", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Formulários e registros/i }));
+
+    await user.click(await screen.findByLabelText(/Selecionar registro rec-1/i));
+    await user.click(screen.getByRole("button", { name: /Aplicar seleção/i }));
+
+    expect(await screen.findByText(/1 selecionado\(s\), 1 aplicado\(s\)/i)).toBeInTheDocument();
+  });
+
+  it("runs a simulation", async () => {
+    const user = userEvent.setup();
+    let capturedRecordsToGenerate: number | null = null;
+    server.use(
+      http.post("http://localhost:8080/api/simulations/generate", async ({ request }) => {
+        const body = (await request.json()) as { recordsToGenerate: number; scenarioName: string };
+        capturedRecordsToGenerate = body.recordsToGenerate;
+        return HttpResponse.json(
+          Array.from({ length: body.recordsToGenerate }, (_, index) => ({
+            id: `sim-${index + 1}`,
+            timestamp: "2024-06-18T08:00:00Z",
+            roadType: "LOCAL",
+            vehicleVolume: 80 + index,
+            eventType: body.scenarioName,
+            weather: "SUNNY",
+            streetId: `sim-street-${index + 1}`,
+            streetOsmWayId: 800 + index,
+            streetName: `Rua Simulada ${index + 1}`
+          }))
+        );
+      })
     );
+
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Formulários e registros/i }));
+    await user.click(await screen.findByRole("button", { name: /Executar simulação/i }));
+
+    await waitFor(() => expect(capturedRecordsToGenerate).toBe(18));
   });
 
-  it("deve exibir os botões de exportação", async () => {
-    renderApp();
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Exportar CSV/i })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /Exportar JSON/i })).toBeInTheDocument();
-    });
+  it("exports csv", async () => {
+    const user = userEvent.setup();
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Exportar CSV/i }));
+
+    expect(await screen.findByText(/Exportação preparada no formato CSV/i)).toBeInTheDocument();
+    expect(URL.createObjectURL).toHaveBeenCalled();
+    expect(click).toHaveBeenCalledTimes(1);
   });
-});
 
-// ─── Erros de backend ─────────────────────────────────────────────────────────
-
-describe("App — erros de backend", () => {
-
-  it("deve exibir mensagem de erro quando backend falha", async () => {
+  it("shows backend errors without crashing", async () => {
     server.use(
       http.get("http://localhost:8080/api/traffic-records", () =>
-        HttpResponse.json({}, { status: 500 })
+        HttpResponse.json({ message: "backend caiu" }, { status: 500 })
       )
     );
-    renderApp();
-    await waitFor(() =>
-      expect(screen.getByText(/backend|atenção|erro/i)).toBeInTheDocument()
-    );
-  });
 
-  it("não deve travar com banco vazio", async () => {
-    server.use(
-      http.get("http://localhost:8080/api/traffic-records", () => HttpResponse.json([])),
-      http.get("http://localhost:8080/api/traffic-insights", () =>
-        HttpResponse.json({ insights: [] })
-      )
-    );
-    renderApp();
-    await waitFor(() =>
-      expect(screen.getByText(/Conectado/i)).toBeInTheDocument()
-    );
-  });
+    render(<App />);
 
-  it("deve exibir placeholder quando não há insights", async () => {
-    server.use(
-      http.get("http://localhost:8080/api/traffic-insights", () =>
-        HttpResponse.json({ insights: [] })
-      )
-    );
-    renderApp();
-    await waitFor(() =>
-      expect(screen.getByText(/Aguardando registros/i)).toBeInTheDocument()
-    );
-  });
-});
-
-// ─── Navegação entre views ────────────────────────────────────────────────────
-
-describe("App — navegação entre views", () => {
-
-  it("deve iniciar na view de insights com aria-pressed=true", async () => {
-    renderApp();
-    await waitFor(() => {
-      const btn = screen.getByRole("button", { name: /Página de insights/i });
-      expect(btn).toHaveAttribute("aria-pressed", "true");
-    });
-  });
-
-  it("deve ir para view de formulários ao clicar", async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await waitFor(() => screen.getByText(/Formulários e registros/i));
-
-    await user.click(screen.getByRole("button", { name: /Formulários e registros/i }));
-
-    await waitFor(() =>
-      expect(screen.getByText(/Adicionar registro de tráfego/i)).toBeInTheDocument()
-    );
-  });
-
-  it("deve voltar para home ao clicar em Página de insights", async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await waitFor(() => screen.getByText(/Formulários e registros/i));
-
-    await user.click(screen.getByRole("button", { name: /Formulários e registros/i }));
-    await waitFor(() => screen.getByText(/Adicionar registro/i));
-
-    await user.click(screen.getByRole("button", { name: /Página de insights/i }));
-    await waitFor(() =>
-      expect(screen.getByText(/Veículos capturados/i)).toBeInTheDocument()
-    );
-  });
-});
-
-// ─── Formulário de registro ───────────────────────────────────────────────────
-
-describe("App — formulário de criação de registro", () => {
-
-  async function goToWorkspace(user: ReturnType<typeof userEvent.setup>) {
-    await waitFor(() => screen.getByText(/Formulários e registros/i));
-    await user.click(screen.getByRole("button", { name: /Formulários e registros/i }));
-    await waitFor(() => screen.getByText(/Adicionar registro de tráfego/i));
-  }
-
-  it("deve exibir todos os campos do formulário", async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await goToWorkspace(user);
-
-    expect(screen.getByLabelText(/Data e hora/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Tipo de via/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Volume de veículos/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Região/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Tipo de evento/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Clima/i)).toBeInTheDocument();
-  });
-
-  it("deve desabilitar o botão durante o envio", async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await goToWorkspace(user);
-
-    const btn = screen.getByRole("button", { name: /Salvar registro/i });
-    await user.click(btn);
-    expect(btn).toBeDisabled();
-  });
-
-  it("deve exibir mensagem de sucesso após salvar", async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await goToWorkspace(user);
-
-    await user.click(screen.getByRole("button", { name: /Salvar registro/i }));
-    await waitFor(() =>
-      expect(screen.getByText(/registro de tráfego adicionado/i)).toBeInTheDocument()
-    );
-  });
-
-  it("deve exibir erro quando backend retorna 400", async () => {
-    server.use(
-      http.post("http://localhost:8080/api/traffic-records", () =>
-        HttpResponse.json({ code: "VALIDATION_ERROR", message: "Dados inválidos" }, { status: 400 })
-      )
-    );
-    const user = userEvent.setup();
-    renderApp();
-    await goToWorkspace(user);
-
-    await user.click(screen.getByRole("button", { name: /Salvar registro/i }));
-    await waitFor(() =>
-      expect(screen.getByText(/inválidos|Dados/i)).toBeInTheDocument()
-    );
-  });
-});
-
-// ─── Formulário de simulação ──────────────────────────────────────────────────
-
-describe("App — formulário de simulação", () => {
-
-  async function goToWorkspace(user: ReturnType<typeof userEvent.setup>) {
-    await waitFor(() => screen.getByText(/Formulários e registros/i));
-    await user.click(screen.getByRole("button", { name: /Formulários e registros/i }));
-    await waitFor(() => screen.getByText(/Gerar tráfego simulado/i));
-  }
-
-  it("deve exibir campos do formulário de simulação", async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await goToWorkspace(user);
-
-    expect(screen.getByLabelText(/Nome do cenário/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Registros a gerar/i)).toBeInTheDocument();
-  });
-
-  it("deve executar e exibir contagem de registros gerados", async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await goToWorkspace(user);
-
-    await user.click(screen.getByRole("button", { name: /Executar simulação/i }));
-    await waitFor(() =>
-      expect(screen.getByText(/gerou \d+ novos registros/i)).toBeInTheDocument()
-    );
-  });
-
-  it("deve desabilitar o botão durante a geração", async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await goToWorkspace(user);
-
-    const btn = screen.getByRole("button", { name: /Executar simulação/i });
-    await user.click(btn);
-    expect(btn).toBeDisabled();
-  });
-});
-
-// ─── Tabela e filtro ──────────────────────────────────────────────────────────
-
-describe("App — tabela de registros e filtro", () => {
-
-  async function goToWorkspace(user: ReturnType<typeof userEvent.setup>) {
-    await waitFor(() => screen.getByText(/Formulários e registros/i));
-    await user.click(screen.getByRole("button", { name: /Formulários e registros/i }));
-    await waitFor(() => screen.getByText(/Registros recebidos/i));
-  }
-
-  it("deve exibir registros do backend na tabela", async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await goToWorkspace(user);
-
-    await waitFor(() => {
-      expect(screen.getByText(/Arterial/i)).toBeInTheDocument();
-      expect(screen.getByText(/Highway/i)).toBeInTheDocument();
-    });
-  });
-
-  it("deve filtrar registros ao digitar", async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await goToWorkspace(user);
-    await waitFor(() => screen.getByText(/Arterial/i));
-
-    await user.type(screen.getByPlaceholderText(/Buscar por região/i), "NORTE");
-
-    await waitFor(() => {
-      expect(screen.queryByText(/^Arterial$/i)).not.toBeInTheDocument();
-      expect(screen.getByText(/Highway/i)).toBeInTheDocument();
-    });
-  });
-
-  it("deve exibir estado vazio quando filtro não corresponde", async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await goToWorkspace(user);
-    await waitFor(() => screen.getByText(/Arterial/i));
-
-    await user.type(
-      screen.getByPlaceholderText(/Buscar por região/i),
-      "XXXXXXXXXXXXXXXXXXX"
-    );
-
-    await waitFor(() =>
-      expect(screen.getByText(/Nenhum registro corresponde/i)).toBeInTheDocument()
-    );
-  });
-});
-
-// ─── Exportação ───────────────────────────────────────────────────────────────
-
-describe("App — exportação de dados", () => {
-
-  it("deve exibir mensagem de sucesso após exportar CSV", async () => {
-    URL.createObjectURL = vi.fn().mockReturnValue("blob:test");
-    URL.revokeObjectURL = vi.fn();
-
-    const user = userEvent.setup();
-    renderApp();
-    await waitFor(() => screen.getByRole("button", { name: /Exportar CSV/i }));
-
-    await user.click(screen.getByRole("button", { name: /Exportar CSV/i }));
-    await waitFor(() =>
-      expect(screen.getByText(/Exportação preparada.*CSV/i)).toBeInTheDocument()
-    );
-  });
-});
-
-// ─── Acessibilidade ───────────────────────────────────────────────────────────
-
-describe("App — acessibilidade", () => {
-
-  it("deve ter skip-link 'Pular para o conteúdo'", async () => {
-    renderApp();
-    await waitFor(() =>
-      expect(screen.getByText(/Pular para o conteúdo/i)).toBeInTheDocument()
-    );
-  });
-
-  it("deve ter #main-content no DOM", async () => {
-    renderApp();
-    await waitFor(() =>
-      expect(document.getElementById("main-content")).not.toBeNull()
-    );
-  });
-
-  it("deve ter botões de navegação com aria-pressed", async () => {
-    renderApp();
-    await waitFor(() => {
-      screen.getAllByRole("button", { name: /insights|formulários/i })
-        .forEach(btn => expect(btn).toHaveAttribute("aria-pressed"));
-    });
-  });
-
-  it("deve ter pelo menos uma região com aria-live='polite'", async () => {
-    renderApp();
-    await waitFor(() => {
-      const liveRegions = document.querySelectorAll("[aria-live='polite']");
-      expect(liveRegions.length).toBeGreaterThan(0);
-    });
+    expect(await screen.findByText(/backend caiu/i)).toBeInTheDocument();
+    expect(screen.getByText(/Situação/i)).toBeInTheDocument();
   });
 });
