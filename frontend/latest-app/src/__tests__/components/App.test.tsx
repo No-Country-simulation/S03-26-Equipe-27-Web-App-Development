@@ -265,6 +265,71 @@ describe("App", () => {
     expect(firstCheckbox).toBeChecked();
   });
 
+  it("selects and clears all filtered records across pages", async () => {
+    const user = userEvent.setup();
+    const pagedRecords = Array.from({ length: 22 }, (_, index) => ({
+      id: `page-rec-${index + 1}`,
+      timestamp: `2024-06-${String((index % 9) + 10).padStart(2, "0")}T08:00:00Z`,
+      roadType: index % 2 === 0 ? "ARTERIAL" : "LOCAL",
+      vehicleVolume: 100 + index,
+      eventType: index % 3 === 0 ? "RUSH_HOUR" : null,
+      weather: index % 2 === 0 ? "SUNNY" : "RAIN",
+      streetId: `street-${index + 1}`,
+      streetOsmWayId: 1000 + index,
+      streetName: `Rua ${index + 1}`
+    })) satisfies TrafficRecord[];
+
+    server.use(
+      http.get("http://localhost:8080/api/traffic-records", ({ request }) => {
+        const url = new URL(request.url);
+        const page = Number(url.searchParams.get("page") ?? "0");
+        const size = Number(url.searchParams.get("size") ?? "20");
+        const start = page * size;
+        return HttpResponse.json({
+          items: pagedRecords.slice(start, start + size),
+          page,
+          size,
+          totalItems: pagedRecords.length,
+          totalPages: Math.ceil(pagedRecords.length / size)
+        } satisfies PagedResponse<TrafficRecord>);
+      }),
+      http.get("http://localhost:8080/api/traffic-records/summary", () =>
+        HttpResponse.json({
+          recordCount: pagedRecords.length,
+          totalVehicleVolume: pagedRecords.reduce((sum, record) => sum + record.vehicleVolume, 0),
+          uniqueStreetCount: pagedRecords.length,
+          averageVehicleVolume: Math.round(
+            pagedRecords.reduce((sum, record) => sum + record.vehicleVolume, 0) / pagedRecords.length
+          ),
+          latestTimestamp: pagedRecords[0]?.timestamp ?? null
+        } satisfies TrafficRecordSummary)
+      )
+    );
+
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Formulários e registros/i }));
+    await user.click(screen.getByRole("button", { name: /Selecionar\/limpar filtrados/i }));
+
+    await waitFor(() => expect(screen.getByText(/22 selecionado\(s\), 0 aplicado\(s\)/i)).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: /Próxima página/i }));
+
+    const page21Checkbox = await screen.findByLabelText("Selecionar registro page-rec-21");
+    expect(page21Checkbox).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /Selecionar\/limpar filtrados/i }));
+
+    await waitFor(() => expect(screen.getByText(/0 selecionado\(s\), 0 aplicado\(s\)/i)).toBeInTheDocument());
+
+    expect(screen.getByLabelText("Selecionar registro page-rec-21")).not.toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /Página anterior/i }));
+
+    const firstCheckbox = await screen.findByLabelText("Selecionar registro page-rec-1");
+    expect(firstCheckbox).not.toBeChecked();
+  });
+
   it("keeps the dashboard stable when the backend returns no records", async () => {
     server.use(
       http.get("http://localhost:8080/api/traffic-records", () =>

@@ -295,6 +295,7 @@ export default function App() {
   const [statusMessage, setStatusMessage] = useState("Conectando à central de tráfego.");
   const [loading, setLoading] = useState(true);
   const [recordsLoading, setRecordsLoading] = useState(true);
+  const [bulkSelectionLoading, setBulkSelectionLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<"record" | "simulation" | "export" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ViewMode>("home");
@@ -471,18 +472,55 @@ export default function App() {
     );
   }
 
-  function toggleAllFilteredSelection() {
-    const visibleRecordIds = recordsPage.items.map((record) => record.id);
-    if (visibleRecordIds.length === 0) {
+  async function getAllFilteredRecordIds(query: string) {
+    const firstPage = await getTrafficRecords({ page: 0, size: emptyRecordsPage.size, query });
+    const recordIds = firstPage.items.map((record) => record.id);
+
+    if (firstPage.totalPages <= 1) {
+      return recordIds;
+    }
+
+    const remainingPages = await Promise.all(
+      Array.from({ length: firstPage.totalPages - 1 }, (_, index) =>
+        getTrafficRecords({ page: index + 1, size: firstPage.size, query })
+      )
+    );
+
+    remainingPages.forEach((page) => {
+      recordIds.push(...page.items.map((record) => record.id));
+    });
+
+    return recordIds;
+  }
+
+  async function toggleAllFilteredSelection() {
+    if (recordsPage.totalItems === 0) {
       return;
     }
 
-    setStagedRecordIds((current) => {
-      const allSelected = visibleRecordIds.every((id) => current.includes(id));
-      return allSelected
-        ? current.filter((id) => !visibleRecordIds.includes(id))
-        : Array.from(new Set([...current, ...visibleRecordIds]));
-    });
+    setBulkSelectionLoading(true);
+    setError(null);
+
+    try {
+      const filteredRecordIds = await getAllFilteredRecordIds(recordsRequest.query);
+      if (filteredRecordIds.length === 0) {
+        return;
+      }
+
+      setStagedRecordIds((current) => {
+        const filteredRecordIdSet = new Set(filteredRecordIds);
+        const allSelected = filteredRecordIds.every((id) => current.includes(id));
+        return allSelected
+          ? current.filter((id) => !filteredRecordIdSet.has(id))
+          : Array.from(new Set([...current, ...filteredRecordIds]));
+      });
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof ApiError ? caughtError.message : "Não foi possível atualizar a seleção filtrada.";
+      setError(message);
+    } finally {
+      setBulkSelectionLoading(false);
+    }
   }
 
   function clearSelection() {
@@ -879,8 +917,13 @@ export default function App() {
               </div>
 
               <div className="table-actions">
-                <button type="button" className="ghost-button" onClick={toggleAllFilteredSelection}>
-                  Selecionar/limpar filtrados
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => void toggleAllFilteredSelection()}
+                  disabled={!hasRecords || recordsLoading || bulkSelectionLoading}
+                >
+                  {bulkSelectionLoading ? "Atualizando filtrados..." : "Selecionar/limpar filtrados"}
                 </button>
                 <button
                   type="button"
