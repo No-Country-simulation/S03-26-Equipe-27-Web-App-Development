@@ -1,4 +1,4 @@
-package com.smarttrafficflow.backend.domain.analytics;
+package com.smarttrafficflow.backend.domain.analytics.service;
 
 import com.smarttrafficflow.backend.api.dto.TrafficStatsResponse;
 import com.smarttrafficflow.backend.domain.trafficrecords.entity.TrafficRecord;
