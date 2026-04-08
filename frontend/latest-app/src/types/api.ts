@@ -12,6 +12,14 @@ export interface TrafficRecord {
   streetName: string | null;
 }
 
+export interface PagedResponse<T> {
+  items: T[];
+  page: number;
+  size: number;
+  totalItems: number;
+  totalPages: number;
+}
+
 export interface CreateTrafficRecordRequest {
   timestamp: string;
   roadType: string;
@@ -28,6 +36,14 @@ export interface TrafficStatsResponse {
 
 export interface TrafficInsightResponse {
   insights: string[];
+}
+
+export interface TrafficRecordSummary {
+  recordCount: number;
+  totalVehicleVolume: number;
+  uniqueStreetCount: number;
+  averageVehicleVolume: number;
+  latestTimestamp: string | null;
 }
 
 export interface SimulationRequest {

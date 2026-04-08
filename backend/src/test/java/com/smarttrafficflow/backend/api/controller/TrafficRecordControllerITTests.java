@@ -1,6 +1,8 @@
 package com.smarttrafficflow.backend.api.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.smarttrafficflow.backend.api.dto.PagedTrafficRecordResponse;
+import com.smarttrafficflow.backend.api.dto.TrafficRecordSummaryResponse;
 import com.smarttrafficflow.backend.api.dto.TrafficRecordResponse;
 import com.smarttrafficflow.backend.api.exception.GlobalExceptionHandler;
 import com.smarttrafficflow.backend.domain.trafficrecords.service.TrafficRecordService;
@@ -19,6 +21,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -133,47 +136,105 @@ class TrafficRecordControllerITTests {
     }
 
     @Test
-    @DisplayName("returns an empty list when there are no stored records")
+    @DisplayName("returns an empty paged payload when there are no stored records")
     void returnsEmptyListWhenThereAreNoRecords() throws Exception {
-        when(trafficRecordService.findAll()).thenReturn(List.of());
+        when(trafficRecordService.findPage(0, 20, null)).thenReturn(new PagedTrafficRecordResponse(List.of(), 0, 20, 0, 0));
 
         mockMvc.perform(get("/api/traffic-records"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$").isArray())
-                .andExpect(jsonPath("$").isEmpty());
+                .andExpect(jsonPath("$.items").isArray())
+                .andExpect(jsonPath("$.items").isEmpty())
+                .andExpect(jsonPath("$.totalItems").value(0))
+                .andExpect(jsonPath("$.totalPages").value(0));
     }
 
     @Test
-    @DisplayName("returns all records exposed by the service")
+    @DisplayName("returns paged records exposed by the service")
     void returnsAllRecordsWhenDataExists() throws Exception {
-        when(trafficRecordService.findAll()).thenReturn(List.of(
-                new TrafficRecordResponse(
-                        UUID.fromString("00000000-0000-0000-0000-000000000001"),
-                        OffsetDateTime.parse("2024-06-17T08:00:00Z"),
-                        "ARTERIAL",
-                        120,
-                        "RUSH_HOUR",
-                        "SUNNY",
-                        UUID.fromString("00000000-0000-0000-0000-000000000101"),
-                        101L,
-                        "Avenida Central"
+        when(trafficRecordService.findPage(1, 10, "norte")).thenReturn(new PagedTrafficRecordResponse(
+                List.of(
+                        new TrafficRecordResponse(
+                                UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                                OffsetDateTime.parse("2024-06-17T08:00:00Z"),
+                                "ARTERIAL",
+                                120,
+                                "RUSH_HOUR",
+                                "SUNNY",
+                                UUID.fromString("00000000-0000-0000-0000-000000000101"),
+                                101L,
+                                "Avenida Central"
+                        ),
+                        new TrafficRecordResponse(
+                                UUID.fromString("00000000-0000-0000-0000-000000000002"),
+                                OffsetDateTime.parse("2024-06-17T17:30:00Z"),
+                                "HIGHWAY",
+                                250,
+                                null,
+                                "RAIN",
+                                UUID.fromString("00000000-0000-0000-0000-000000000202"),
+                                202L,
+                                "Rodovia Norte"
+                        )
                 ),
-                new TrafficRecordResponse(
-                        UUID.fromString("00000000-0000-0000-0000-000000000002"),
-                        OffsetDateTime.parse("2024-06-17T17:30:00Z"),
-                        "HIGHWAY",
-                        250,
-                        null,
-                        "RAIN",
-                        UUID.fromString("00000000-0000-0000-0000-000000000202"),
-                        202L,
-                        "Rodovia Norte"
-                )
+                1,
+                10,
+                12,
+                2
         ));
 
-        mockMvc.perform(get("/api/traffic-records"))
+        mockMvc.perform(get("/api/traffic-records")
+                        .param("page", "1")
+                        .param("size", "10")
+                        .param("query", "norte"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].streetName").value("Avenida Central"))
-                .andExpect(jsonPath("$[1].roadType").value("HIGHWAY"));
+                .andExpect(jsonPath("$.items[0].streetName").value("Avenida Central"))
+                .andExpect(jsonPath("$.items[1].roadType").value("HIGHWAY"))
+                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.size").value(10))
+                .andExpect(jsonPath("$.totalItems").value(12))
+                .andExpect(jsonPath("$.totalPages").value(2));
+    }
+
+    @Test
+    @DisplayName("returns summary metrics for all records")
+    void returnsSummaryMetricsForAllRecords() throws Exception {
+        when(trafficRecordService.findSummary(null)).thenReturn(new TrafficRecordSummaryResponse(
+                2,
+                370,
+                2,
+                185,
+                OffsetDateTime.parse("2024-06-17T17:30:00Z")
+        ));
+
+        mockMvc.perform(get("/api/traffic-records/summary"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.recordCount").value(2))
+                .andExpect(jsonPath("$.totalVehicleVolume").value(370))
+                .andExpect(jsonPath("$.uniqueStreetCount").value(2))
+                .andExpect(jsonPath("$.averageVehicleVolume").value(185))
+                .andExpect(jsonPath("$.latestTimestamp").value("2024-06-17T17:30:00Z"));
+    }
+
+    @Test
+    @DisplayName("returns summary metrics for selected records")
+    void returnsSummaryMetricsForSelectedRecords() throws Exception {
+        List<UUID> recordIds = List.of(
+                UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                UUID.fromString("00000000-0000-0000-0000-000000000002")
+        );
+        when(trafficRecordService.findSummary(eq(recordIds))).thenReturn(new TrafficRecordSummaryResponse(
+                2,
+                370,
+                2,
+                185,
+                OffsetDateTime.parse("2024-06-17T17:30:00Z")
+        ));
+
+        mockMvc.perform(post("/api/traffic-records/summary/filter")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("recordIds", recordIds))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.recordCount").value(2))
+                .andExpect(jsonPath("$.totalVehicleVolume").value(370));
     }
 }

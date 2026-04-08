@@ -1,10 +1,13 @@
 package com.smarttrafficflow.backend.domain.trafficrecords.repository;
 
 import com.smarttrafficflow.backend.domain.trafficrecords.entity.TrafficRecord;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
@@ -14,8 +17,59 @@ public interface TrafficRecordRepository extends JpaRepository<TrafficRecord, UU
     @Query("select tr from TrafficRecord tr join fetch tr.street")
     List<TrafficRecord> findAllWithStreet();
 
+    @Query(
+            value = """
+                    select tr
+                    from TrafficRecord tr
+                    join fetch tr.street st
+                    where (
+                        :queryPattern is null
+                        or lower(tr.roadType) like :queryPattern
+                        or lower(coalesce(st.name, '')) like :queryPattern
+                        or lower(coalesce(tr.weather, '')) like :queryPattern
+                        or lower(coalesce(tr.eventType, '')) like :queryPattern
+                    )
+                    """,
+            countQuery = """
+                    select count(tr)
+                    from TrafficRecord tr
+                    join tr.street st
+                    where (
+                        :queryPattern is null
+                        or lower(tr.roadType) like :queryPattern
+                        or lower(coalesce(st.name, '')) like :queryPattern
+                        or lower(coalesce(tr.weather, '')) like :queryPattern
+                        or lower(coalesce(tr.eventType, '')) like :queryPattern
+                    )
+                    """
+    )
+    Page<TrafficRecord> findPageWithStreet(@Param("queryPattern") String queryPattern, Pageable pageable);
+
     @Query("select tr from TrafficRecord tr join fetch tr.street where tr.id in :ids")
     List<TrafficRecord> findAllByIdInWithStreet(@Param("ids") Collection<UUID> ids);
+
+    @Query("""
+            select
+                count(tr) as recordCount,
+                coalesce(sum(tr.vehicleVolume), 0) as totalVehicleVolume,
+                count(distinct st.id) as uniqueStreetCount,
+                max(tr.timestamp) as latestTimestamp
+            from TrafficRecord tr
+            join tr.street st
+            """)
+    TrafficRecordSummaryView summarizeAll();
+
+    @Query("""
+            select
+                count(tr) as recordCount,
+                coalesce(sum(tr.vehicleVolume), 0) as totalVehicleVolume,
+                count(distinct st.id) as uniqueStreetCount,
+                max(tr.timestamp) as latestTimestamp
+            from TrafficRecord tr
+            join tr.street st
+            where tr.id in :ids
+            """)
+    TrafficRecordSummaryView summarizeByIds(@Param("ids") Collection<UUID> ids);
 
     @Query(
             value = """
@@ -46,5 +100,15 @@ public interface TrafficRecordRepository extends JpaRepository<TrafficRecord, UU
         Integer getVehicleVolume();
 
         String getGeometry();
+    }
+
+    interface TrafficRecordSummaryView {
+        long getRecordCount();
+
+        long getTotalVehicleVolume();
+
+        long getUniqueStreetCount();
+
+        OffsetDateTime getLatestTimestamp();
     }
 }

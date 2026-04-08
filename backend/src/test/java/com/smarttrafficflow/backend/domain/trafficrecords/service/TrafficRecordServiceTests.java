@@ -1,11 +1,15 @@
 package com.smarttrafficflow.backend.domain.trafficrecords.service;
 
 import com.smarttrafficflow.backend.api.dto.CreateTrafficRecordRequest;
+import com.smarttrafficflow.backend.api.dto.PagedTrafficRecordResponse;
 import com.smarttrafficflow.backend.api.dto.TrafficRecordResponse;
+import com.smarttrafficflow.backend.api.dto.TrafficRecordSummaryResponse;
 import com.smarttrafficflow.backend.domain.streets.entity.Street;
 import com.smarttrafficflow.backend.domain.streets.service.StreetService;
 import com.smarttrafficflow.backend.domain.trafficrecords.entity.TrafficRecord;
 import com.smarttrafficflow.backend.domain.trafficrecords.repository.TrafficRecordRepository;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -83,6 +87,70 @@ class TrafficRecordServiceTests {
         assertThat(records).hasSize(2);
         assertThat(records.get(0).streetName()).isEqualTo("Avenida Central");
         assertThat(records.get(1).streetOsmWayId()).isEqualTo(202L);
+    }
+
+    @Test
+    @DisplayName("returns paged records with normalized query and stable metadata")
+    void returnsPagedRecords() {
+        when(trafficRecordRepository.findPageWithStreet(any(), any())).thenReturn(new PageImpl<>(
+                List.of(
+                        entity("ARTERIAL", 120, "Avenida Central", 101L),
+                        entity("HIGHWAY", 250, "Rodovia Norte", 202L)
+                ),
+                PageRequest.of(1, 2),
+                5
+        ));
+
+        PagedTrafficRecordResponse response = trafficRecordService.findPage(1, 2, "  norte ");
+
+        assertThat(response.items()).hasSize(2);
+        assertThat(response.page()).isEqualTo(1);
+        assertThat(response.size()).isEqualTo(2);
+        assertThat(response.totalItems()).isEqualTo(5);
+        assertThat(response.totalPages()).isEqualTo(3);
+        verify(trafficRecordRepository).findPageWithStreet(org.mockito.ArgumentMatchers.eq("%norte%"), any());
+    }
+
+    @Test
+    @DisplayName("summarizes all records when no ids are provided")
+    void summarizesAllRecordsWhenNoIdsProvided() {
+        TrafficRecordRepository.TrafficRecordSummaryView summaryView = mock(TrafficRecordRepository.TrafficRecordSummaryView.class);
+        when(summaryView.getRecordCount()).thenReturn(4L);
+        when(summaryView.getTotalVehicleVolume()).thenReturn(640L);
+        when(summaryView.getUniqueStreetCount()).thenReturn(3L);
+        when(summaryView.getLatestTimestamp()).thenReturn(OffsetDateTime.parse("2024-06-17T17:30:00Z"));
+        when(trafficRecordRepository.summarizeAll()).thenReturn(summaryView);
+
+        TrafficRecordSummaryResponse response = trafficRecordService.findSummary(List.of());
+
+        assertThat(response.recordCount()).isEqualTo(4);
+        assertThat(response.totalVehicleVolume()).isEqualTo(640);
+        assertThat(response.uniqueStreetCount()).isEqualTo(3);
+        assertThat(response.averageVehicleVolume()).isEqualTo(160);
+        assertThat(response.latestTimestamp()).isEqualTo(OffsetDateTime.parse("2024-06-17T17:30:00Z"));
+        verify(trafficRecordRepository).summarizeAll();
+        verify(trafficRecordRepository, never()).summarizeByIds(any());
+    }
+
+    @Test
+    @DisplayName("summarizes selected records when ids are provided")
+    void summarizesSelectedRecordsWhenIdsProvided() {
+        List<UUID> recordIds = List.of(UUID.randomUUID(), UUID.randomUUID());
+        TrafficRecordRepository.TrafficRecordSummaryView summaryView = mock(TrafficRecordRepository.TrafficRecordSummaryView.class);
+        when(summaryView.getRecordCount()).thenReturn(2L);
+        when(summaryView.getTotalVehicleVolume()).thenReturn(370L);
+        when(summaryView.getUniqueStreetCount()).thenReturn(2L);
+        when(summaryView.getLatestTimestamp()).thenReturn(OffsetDateTime.parse("2024-06-17T08:00:00Z"));
+        when(trafficRecordRepository.summarizeByIds(recordIds)).thenReturn(summaryView);
+
+        TrafficRecordSummaryResponse response = trafficRecordService.findSummary(recordIds);
+
+        assertThat(response.recordCount()).isEqualTo(2);
+        assertThat(response.totalVehicleVolume()).isEqualTo(370);
+        assertThat(response.uniqueStreetCount()).isEqualTo(2);
+        assertThat(response.averageVehicleVolume()).isEqualTo(185);
+        verify(trafficRecordRepository).summarizeByIds(recordIds);
+        verify(trafficRecordRepository, never()).summarizeAll();
     }
 
     @Test

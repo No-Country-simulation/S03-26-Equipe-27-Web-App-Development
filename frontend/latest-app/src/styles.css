@@ -679,6 +679,25 @@ button {
   margin-bottom: 14px;
 }
 
+.table-pagination-summary,
+.table-pagination-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.table-pagination-summary {
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.table-pagination-summary span,
+.table-pagination-actions button {
+  white-space: nowrap;
+}
+
 .table-selection-count {
   font-size: 0.9rem;
   color: var(--muted);
@@ -688,6 +707,11 @@ button {
   margin: 0 0 12px;
   color: var(--muted);
   font-size: 0.92rem;
+}
+
+.table-pagination-actions {
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 
 table {
@@ -864,6 +888,11 @@ tbody tr:hover {
   }
 
   .table-actions {
+    align-items: stretch;
+  }
+
+  .table-pagination-summary,
+  .table-pagination-actions {
     align-items: stretch;
   }
 
