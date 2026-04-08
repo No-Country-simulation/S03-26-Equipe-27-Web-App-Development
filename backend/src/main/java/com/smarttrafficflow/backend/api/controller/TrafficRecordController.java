@@ -1,7 +1,10 @@
 package com.smarttrafficflow.backend.api.controller;
 
 import com.smarttrafficflow.backend.api.dto.CreateTrafficRecordRequest;
+import com.smarttrafficflow.backend.api.dto.PagedTrafficRecordResponse;
+import com.smarttrafficflow.backend.api.dto.RecordIdsFilterRequest;
 import com.smarttrafficflow.backend.api.dto.TrafficRecordResponse;
+import com.smarttrafficflow.backend.api.dto.TrafficRecordSummaryResponse;
 import com.smarttrafficflow.backend.domain.trafficrecords.service.TrafficRecordService;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
@@ -11,10 +14,12 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/traffic-records")
@@ -39,9 +44,28 @@ public class TrafficRecordController {
     }
 
     @GetMapping
-    public List<TrafficRecordResponse> findAll() {
-        List<TrafficRecordResponse> records = trafficRecordService.findAll();
-        log.info("GET /api/traffic-records - returning {} records", records.size());
-        return records;
+    public PagedTrafficRecordResponse findPage(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String query
+    ) {
+        PagedTrafficRecordResponse recordsPage = trafficRecordService.findPage(page, size, query);
+        log.info("GET /api/traffic-records - returning page={} size={} totalItems={}",
+                recordsPage.page(), recordsPage.size(), recordsPage.totalItems());
+        return recordsPage;
+    }
+
+    @GetMapping("/summary")
+    public TrafficRecordSummaryResponse findSummary(@RequestParam(required = false) List<UUID> recordIds) {
+        int filterSize = recordIds == null ? 0 : recordIds.size();
+        log.info("GET /api/traffic-records/summary - summarizing {} selected recordIds", filterSize);
+        return trafficRecordService.findSummary(recordIds);
+    }
+
+    @PostMapping("/summary/filter")
+    public TrafficRecordSummaryResponse findFilteredSummary(@RequestBody RecordIdsFilterRequest request) {
+        int filterSize = request.recordIds() == null ? 0 : request.recordIds().size();
+        log.info("POST /api/traffic-records/summary/filter - summarizing {} selected recordIds", filterSize);
+        return trafficRecordService.findSummary(request.recordIds());
     }
 }

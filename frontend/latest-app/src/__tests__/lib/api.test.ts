@@ -8,6 +8,7 @@ import {
   getExport,
   getTrafficInsights,
   getTrafficMap,
+  getTrafficRecordSummary,
   getTrafficRecords,
   getTrafficStats,
   searchStreets
@@ -18,14 +19,35 @@ const BASE = "http://localhost:8080/api";
 describe("api client", () => {
   it("loads traffic records", async () => {
     const records = await getTrafficRecords();
-    expect(records).toHaveLength(2);
-    expect(records[0]?.streetName).toBe("Avenida Central");
+    expect(records.items).toHaveLength(2);
+    expect(records.items[0]?.streetName).toBe("Avenida Central");
+    expect(records.totalItems).toBe(2);
   });
 
   it("returns an empty list when the records endpoint is empty", async () => {
-    server.use(http.get(`${BASE}/traffic-records`, () => HttpResponse.json([])));
+    server.use(
+      http.get(`${BASE}/traffic-records`, () =>
+        HttpResponse.json({ items: [], page: 0, size: 20, totalItems: 0, totalPages: 0 })
+      )
+    );
 
-    await expect(getTrafficRecords()).resolves.toEqual([]);
+    await expect(getTrafficRecords()).resolves.toEqual({ items: [], page: 0, size: 20, totalItems: 0, totalPages: 0 });
+  });
+
+  it("passes pagination and query params for records", async () => {
+    let capturedUrl = "";
+    server.use(
+      http.get(`${BASE}/traffic-records`, ({ request }) => {
+        capturedUrl = request.url;
+        return HttpResponse.json({ items: [], page: 1, size: 10, totalItems: 0, totalPages: 0 });
+      })
+    );
+
+    await getTrafficRecords({ page: 1, size: 10, query: "Rodovia" });
+
+    expect(capturedUrl).toContain("page=1");
+    expect(capturedUrl).toContain("size=10");
+    expect(capturedUrl).toContain("query=Rodovia");
   });
 
   it("creates a traffic record using streetOsmWayId", async () => {
@@ -115,6 +137,18 @@ describe("api client", () => {
   it("loads filtered insights using POST", async () => {
     const insights = await getTrafficInsights(["rec-1"]);
     expect(insights.insights[0]).toMatch(/17h/);
+  });
+
+  it("loads record summary without a selection using GET", async () => {
+    const summary = await getTrafficRecordSummary();
+    expect(summary.recordCount).toBe(2);
+    expect(summary.totalVehicleVolume).toBe(370);
+  });
+
+  it("loads record summary with a selection using POST", async () => {
+    const summary = await getTrafficRecordSummary(["rec-1"]);
+    expect(summary.recordCount).toBe(1);
+    expect(summary.totalVehicleVolume).toBe(120);
   });
 
   it("returns an empty feature collection when no record ids are passed", async () => {

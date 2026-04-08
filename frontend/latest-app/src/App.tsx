@@ -8,29 +8,37 @@ import {
   createTrafficRecord,
   generateSimulation,
   getExport,
-  searchStreets,
   getTrafficInsights,
   getTrafficMap,
+  getTrafficRecordSummary,
   getTrafficRecords,
-  getTrafficStats
+  getTrafficStats,
+  searchStreets
 } from "./lib/api";
 import type {
   CreateTrafficRecordRequest,
   MapFeatureCollection,
   MapPoint,
+  PagedResponse,
   SimulationRequest,
   TrafficInsightResponse,
   TrafficRecord,
+  TrafficRecordSummary,
   TrafficStatsResponse
 } from "./types/api";
 
 type DashboardState = {
-  records: TrafficRecord[];
+  summary: TrafficRecordSummary;
   byHour: TrafficStatsResponse;
   byWeekday: TrafficStatsResponse;
   byRoadType: TrafficStatsResponse;
   insights: TrafficInsightResponse;
   mapData: MapFeatureCollection;
+};
+
+type RecordsRequestState = {
+  page: number;
+  query: string;
 };
 
 type ChartCardProps = {
@@ -45,6 +53,20 @@ type ViewMode = "home" | "workspace";
 
 const emptyStats: TrafficStatsResponse = { labels: [], values: [] };
 const emptyInsights: TrafficInsightResponse = { insights: [] };
+const emptySummary: TrafficRecordSummary = {
+  recordCount: 0,
+  totalVehicleVolume: 0,
+  uniqueStreetCount: 0,
+  averageVehicleVolume: 0,
+  latestTimestamp: null
+};
+const emptyRecordsPage: PagedResponse<TrafficRecord> = {
+  items: [],
+  page: 0,
+  size: 20,
+  totalItems: 0,
+  totalPages: 0
+};
 
 const recordTemplate: CreateTrafficRecordRequest = {
   timestamp: new Date().toISOString(),
@@ -120,24 +142,11 @@ function getPeakLabel(stats: TrafficStatsResponse) {
   return formatLabel(stats.labels[peakIndex] ?? "Desconhecido");
 }
 
-function getAverageVolume(records: TrafficRecord[]) {
-  if (records.length === 0) {
-    return 0;
-  }
-  return Math.round(records.reduce((sum, record) => sum + record.vehicleVolume, 0) / records.length);
-}
-
-function getUniqueStreets(records: TrafficRecord[]) {
-  return new Set(records.map((record) => record.streetOsmWayId).filter(Boolean)).size;
-}
-
-function getLatestTimestamp(records: TrafficRecord[]) {
-  if (records.length === 0) {
+function getLatestTimestamp(timestamp: string | null) {
+  if (!timestamp) {
     return "Sem registros recebidos";
   }
-
-  const latest = [...records].sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
-  return formatDateTime(latest.timestamp);
+  return formatDateTime(timestamp);
 }
 
 function areSameSelection(left: string[], right: string[]) {
@@ -266,13 +275,15 @@ function TrafficMapCard({ eyebrow, title, mapData, emptyText }: TrafficMapCardPr
 
 export default function App() {
   const [dashboard, setDashboard] = useState<DashboardState>({
-    records: [],
+    summary: emptySummary,
     byHour: emptyStats,
     byWeekday: emptyStats,
     byRoadType: emptyStats,
     insights: emptyInsights,
     mapData: { type: "FeatureCollection", features: [] }
   });
+  const [recordsPage, setRecordsPage] = useState<PagedResponse<TrafficRecord>>(emptyRecordsPage);
+  const [recordsRequest, setRecordsRequest] = useState<RecordsRequestState>({ page: 0, query: "" });
   const [appliedRecordIds, setAppliedRecordIds] = useState<string[]>([]);
   const [stagedRecordIds, setStagedRecordIds] = useState<string[]>([]);
   const [streetQuery, setStreetQuery] = useState("");
@@ -283,6 +294,8 @@ export default function App() {
   const [tableQuery, setTableQuery] = useState("");
   const [statusMessage, setStatusMessage] = useState("Conectando à central de tráfego.");
   const [loading, setLoading] = useState(true);
+  const [recordsLoading, setRecordsLoading] = useState(true);
+  const [bulkSelectionLoading, setBulkSelectionLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<"record" | "simulation" | "export" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ViewMode>("home");
@@ -294,8 +307,8 @@ export default function App() {
     setError(null);
 
     try {
-      const [records, byHour, byWeekday, byRoadType, insights, mapData] = await Promise.all([
-        getTrafficRecords(),
+      const [summary, byHour, byWeekday, byRoadType, insights, mapData] = await Promise.all([
+        getTrafficRecordSummary(recordIds),
         getTrafficStats("hour", recordIds),
         getTrafficStats("weekday", recordIds),
         getTrafficStats("roadType", recordIds),
@@ -304,7 +317,7 @@ export default function App() {
       ]);
 
       startTransition(() => {
-        setDashboard({ records, byHour, byWeekday, byRoadType, insights, mapData });
+        setDashboard({ summary, byHour, byWeekday, byRoadType, insights, mapData });
       });
 
       setStatusMessage(`Conexão ativa estabelecida com ${API_BASE_URL}.`);
@@ -318,9 +331,38 @@ export default function App() {
     }
   }
 
+  async function refreshRecordsPage(page: number, query: string) {
+    setRecordsLoading(true);
+    setError(null);
+
+    try {
+      const nextPage = await getTrafficRecords({ page, size: emptyRecordsPage.size, query });
+      startTransition(() => {
+        setRecordsPage(nextPage);
+      });
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof ApiError ? caughtError.message : "Não foi possível carregar os registros paginados.";
+      setError(message);
+    } finally {
+      setRecordsLoading(false);
+    }
+  }
+
   useEffect(() => {
     void refreshDashboard([]);
   }, []);
+
+  useEffect(() => {
+    void refreshRecordsPage(recordsRequest.page, recordsRequest.query);
+  }, [recordsRequest]);
+
+  useEffect(() => {
+    const nextQuery = deferredQuery.trim();
+    setRecordsRequest((current) =>
+      current.page === 0 && current.query === nextQuery ? current : { ...current, page: 0, query: nextQuery }
+    );
+  }, [deferredQuery]);
 
   useEffect(() => {
     const query = deferredStreetQuery.trim();
@@ -368,7 +410,8 @@ export default function App() {
         timestamp: new Date(recordForm.timestamp).toISOString()
       });
       setStatusMessage("Novo registro de tráfego adicionado ao painel.");
-      await refreshDashboard();
+      await Promise.all([refreshDashboard(), refreshRecordsPage(0, recordsRequest.query)]);
+      setRecordsRequest((current) => ({ ...current, page: 0 }));
     } catch (caughtError) {
       const message =
         caughtError instanceof ApiError ? caughtError.message : "Não foi possível criar o registro de tráfego.";
@@ -386,7 +429,8 @@ export default function App() {
     try {
       const generated = await generateSimulation(simulationForm);
       setStatusMessage(`A simulação gerou ${generated.length} novos registros.`);
-      await refreshDashboard();
+      await Promise.all([refreshDashboard(), refreshRecordsPage(0, recordsRequest.query)]);
+      setRecordsRequest((current) => ({ ...current, page: 0 }));
     } catch (caughtError) {
       const message =
         caughtError instanceof ApiError ? caughtError.message : "Não foi possível gerar os registros da simulação.";
@@ -428,18 +472,55 @@ export default function App() {
     );
   }
 
-  function toggleAllFilteredSelection() {
-    const filteredIds = filteredRecords.map((record) => record.id);
-    if (filteredIds.length === 0) {
+  async function getAllFilteredRecordIds(query: string) {
+    const firstPage = await getTrafficRecords({ page: 0, size: emptyRecordsPage.size, query });
+    const recordIds = firstPage.items.map((record) => record.id);
+
+    if (firstPage.totalPages <= 1) {
+      return recordIds;
+    }
+
+    const remainingPages = await Promise.all(
+      Array.from({ length: firstPage.totalPages - 1 }, (_, index) =>
+        getTrafficRecords({ page: index + 1, size: firstPage.size, query })
+      )
+    );
+
+    remainingPages.forEach((page) => {
+      recordIds.push(...page.items.map((record) => record.id));
+    });
+
+    return recordIds;
+  }
+
+  async function toggleAllFilteredSelection() {
+    if (recordsPage.totalItems === 0) {
       return;
     }
 
-    setStagedRecordIds((current) => {
-      const allSelected = filteredIds.every((id) => current.includes(id));
-      return allSelected
-        ? current.filter((id) => !filteredIds.includes(id))
-        : Array.from(new Set([...current, ...filteredIds]));
-    });
+    setBulkSelectionLoading(true);
+    setError(null);
+
+    try {
+      const filteredRecordIds = await getAllFilteredRecordIds(recordsRequest.query);
+      if (filteredRecordIds.length === 0) {
+        return;
+      }
+
+      setStagedRecordIds((current) => {
+        const filteredRecordIdSet = new Set(filteredRecordIds);
+        const allSelected = filteredRecordIds.every((id) => current.includes(id));
+        return allSelected
+          ? current.filter((id) => !filteredRecordIdSet.has(id))
+          : Array.from(new Set([...current, ...filteredRecordIds]));
+      });
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof ApiError ? caughtError.message : "Não foi possível atualizar a seleção filtrada.";
+      setError(message);
+    } finally {
+      setBulkSelectionLoading(false);
+    }
   }
 
   function clearSelection() {
@@ -451,33 +532,22 @@ export default function App() {
     setStreetQuery(name);
     setStreetOptions([]);
   }
-
-  const filteredRecords = dashboard.records.filter((record) => {
-    const query = deferredQuery.trim().toLowerCase();
-    if (!query) {
-      return true;
-    }
-
-    return [record.roadType, record.streetName, record.weather, record.eventType]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(query));
-  });
-
-  const selectedRecords =
-    appliedRecordIds.length === 0
-      ? dashboard.records
-      : dashboard.records.filter((record) => appliedRecordIds.includes(record.id));
   const analyticsContextLabel =
     appliedRecordIds.length === 0
       ? "Visualizando base completa."
       : `Visualizando ${appliedRecordIds.length} registros selecionados.`;
   const hasPendingSelectionChanges = !areSameSelection(stagedRecordIds, appliedRecordIds);
+  const currentPage = recordsPage.totalPages === 0 ? 1 : recordsPage.page + 1;
+  const totalPages = recordsPage.totalPages === 0 ? 1 : recordsPage.totalPages;
+  const hasRecords = recordsPage.totalItems > 0;
+  const hasPreviousPage = recordsPage.page > 0;
+  const hasNextPage = recordsPage.page + 1 < recordsPage.totalPages;
 
   const summaryCards = [
     {
       label: "Veículos capturados",
-      value: formatCompactNumber(selectedRecords.reduce((sum, record) => sum + record.vehicleVolume, 0)),
-      meta: "Volume acumulado em todos os registros"
+      value: formatCompactNumber(dashboard.summary.totalVehicleVolume),
+      meta: "Volume acumulado no contexto atual"
     },
     {
       label: "Janela de pico",
@@ -486,13 +556,13 @@ export default function App() {
     },
     {
       label: "Ruas mapeadas",
-      value: String(getUniqueStreets(selectedRecords)),
-      meta: "Corredores monitorados com tráfego"
+      value: String(dashboard.summary.uniqueStreetCount),
+      meta: "Corredores monitorados no contexto atual"
     },
     {
       label: "Carga média",
-      value: formatCompactNumber(getAverageVolume(selectedRecords)),
-      meta: "Veículos por registro capturado"
+      value: formatCompactNumber(dashboard.summary.averageVehicleVolume),
+      meta: "Veículos por registro no contexto atual"
     }
   ];
 
@@ -562,7 +632,7 @@ export default function App() {
           <div className="hero-metrics">
             <div>
               <span className="metric-label">Última entrada</span>
-              <strong>{getLatestTimestamp(dashboard.records)}</strong>
+              <strong>{getLatestTimestamp(dashboard.summary.latestTimestamp)}</strong>
             </div>
             <div>
               <span className="metric-label">Endpoint</span>
@@ -838,9 +908,22 @@ export default function App() {
                 </label>
               </div>
 
+              <div className="table-pagination-summary" aria-live="polite">
+                <span>{formatCompactNumber(dashboard.summary.recordCount)} registros no contexto atual</span>
+                <span>{formatCompactNumber(recordsPage.totalItems)} encontrados para esta busca</span>
+                <span>
+                  Página {currentPage} de {totalPages}
+                </span>
+              </div>
+
               <div className="table-actions">
-                <button type="button" className="ghost-button" onClick={toggleAllFilteredSelection}>
-                  Selecionar/limpar filtrados
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => void toggleAllFilteredSelection()}
+                  disabled={!hasRecords || recordsLoading || bulkSelectionLoading}
+                >
+                  {bulkSelectionLoading ? "Atualizando filtrados..." : "Selecionar/limpar filtrados"}
                 </button>
                 <button
                   type="button"
@@ -880,14 +963,20 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredRecords.length === 0 ? (
+                    {!hasRecords && !recordsLoading ? (
                       <tr>
                         <td colSpan={7} className="empty-row">
                           Nenhum registro corresponde ao filtro atual.
                         </td>
                       </tr>
+                    ) : recordsLoading ? (
+                      <tr>
+                        <td colSpan={7} className="empty-row">
+                          Carregando página de registros...
+                        </td>
+                      </tr>
                     ) : (
-                      filteredRecords.map((record) => (
+                      recordsPage.items.map((record) => (
                         <tr key={record.id}>
                           <td>
                             <input
@@ -908,6 +997,25 @@ export default function App() {
                     )}
                   </tbody>
                 </table>
+              </div>
+
+              <div className="table-pagination-actions">
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => setRecordsRequest((current) => ({ ...current, page: current.page - 1 }))}
+                  disabled={!hasPreviousPage || recordsLoading}
+                >
+                  Página anterior
+                </button>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => setRecordsRequest((current) => ({ ...current, page: current.page + 1 }))}
+                  disabled={!hasNextPage || recordsLoading}
+                >
+                  Próxima página
+                </button>
               </div>
             </section>
           </>

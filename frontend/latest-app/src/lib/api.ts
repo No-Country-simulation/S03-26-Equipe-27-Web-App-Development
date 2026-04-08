@@ -1,11 +1,13 @@
 import type {
   CreateTrafficRecordRequest,
   MapFeatureCollection,
+  PagedResponse,
   SimulationRequest,
   StreetSearchResponse,
   StreetOption,
   TrafficInsightResponse,
   TrafficRecord,
+  TrafficRecordSummary,
   TrafficStatsResponse
 } from "../types/api";
 
@@ -48,8 +50,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.text()) as T;
 }
 
-export function getTrafficRecords() {
-  return request<TrafficRecord[]>("/traffic-records");
+export function getTrafficRecords(params?: { page?: number; size?: number; query?: string }) {
+  const searchParams = new URLSearchParams();
+  searchParams.set("page", String(params?.page ?? 0));
+  searchParams.set("size", String(params?.size ?? 20));
+  const query = params?.query?.trim();
+  if (query) {
+    searchParams.set("query", query);
+  }
+
+  return request<PagedResponse<TrafficRecord>>(`/traffic-records?${searchParams.toString()}`);
 }
 
 export function createTrafficRecord(payload: CreateTrafficRecordRequest) {
@@ -57,6 +67,17 @@ export function createTrafficRecord(payload: CreateTrafficRecordRequest) {
     method: "POST",
     body: JSON.stringify(payload)
   });
+}
+
+export function getTrafficRecordSummary(recordIds?: string[]) {
+  if (recordIds && recordIds.length > 0) {
+    return request<TrafficRecordSummary>("/traffic-records/summary/filter", {
+      method: "POST",
+      body: JSON.stringify({ recordIds })
+    });
+  }
+
+  return request<TrafficRecordSummary>("/traffic-records/summary");
 }
 
 function buildRecordIdsQuery(recordIds?: string[]) {

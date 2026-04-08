@@ -1,9 +1,11 @@
 import { http, HttpResponse } from "msw";
 import type {
   MapFeatureCollection,
+  PagedResponse,
   StreetSearchResponse,
   TrafficInsightResponse,
   TrafficRecord,
+  TrafficRecordSummary,
   TrafficStatsResponse
 } from "../../types/api";
 
@@ -81,8 +83,59 @@ export const mockStreetSearch: StreetSearchResponse = {
   total: 2
 };
 
+export const mockSummary: TrafficRecordSummary = {
+  recordCount: mockRecords.length,
+  totalVehicleVolume: mockRecords.reduce((sum, record) => sum + record.vehicleVolume, 0),
+  uniqueStreetCount: new Set(mockRecords.map((record) => record.streetId)).size,
+  averageVehicleVolume: Math.round(mockRecords.reduce((sum, record) => sum + record.vehicleVolume, 0) / mockRecords.length),
+  latestTimestamp: "2024-06-17T17:30:00Z"
+};
+
+function buildPagedRecords(request: Request): PagedResponse<TrafficRecord> {
+  const url = new URL(request.url);
+  const page = Number(url.searchParams.get("page") ?? "0");
+  const size = Number(url.searchParams.get("size") ?? "20");
+  const query = url.searchParams.get("query")?.toLowerCase().trim() ?? "";
+  const filteredItems = query
+    ? mockRecords.filter((record) =>
+        [record.roadType, record.streetName, record.weather, record.eventType]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(query))
+      )
+    : mockRecords;
+  const start = page * size;
+  const items = filteredItems.slice(start, start + size);
+
+  return {
+    items,
+    page,
+    size,
+    totalItems: filteredItems.length,
+    totalPages: filteredItems.length === 0 ? 0 : Math.ceil(filteredItems.length / size)
+  };
+}
+
 export const handlers = [
-  http.get(`${BASE}/traffic-records`, () => HttpResponse.json(mockRecords)),
+  http.get(`${BASE}/traffic-records`, ({ request }) => HttpResponse.json(buildPagedRecords(request))),
+  http.get(`${BASE}/traffic-records/summary`, () => HttpResponse.json(mockSummary)),
+  http.post(`${BASE}/traffic-records/summary/filter`, async ({ request }) => {
+    const body = (await request.json()) as { recordIds?: string[] };
+    if (!body.recordIds?.length) {
+      return HttpResponse.json(mockSummary);
+    }
+
+    const selectedRecords = mockRecords.filter((record) => body.recordIds?.includes(record.id));
+    return HttpResponse.json({
+      recordCount: selectedRecords.length,
+      totalVehicleVolume: selectedRecords.reduce((sum, record) => sum + record.vehicleVolume, 0),
+      uniqueStreetCount: new Set(selectedRecords.map((record) => record.streetId)).size,
+      averageVehicleVolume:
+        selectedRecords.length === 0
+          ? 0
+          : Math.round(selectedRecords.reduce((sum, record) => sum + record.vehicleVolume, 0) / selectedRecords.length),
+      latestTimestamp: selectedRecords[0]?.timestamp ?? null
+    } satisfies TrafficRecordSummary);
+  }),
   http.post(`${BASE}/traffic-records`, async ({ request }) => {
     const body = (await request.json()) as {
       timestamp: string;
