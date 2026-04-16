@@ -1,5 +1,7 @@
 package com.smarttrafficflow.backend.domain.streets.service;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -11,10 +13,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 @Component
@@ -61,58 +63,91 @@ public class StreetGeoJsonImportRunner implements CommandLineRunner {
             throw new IllegalArgumentException("Arquivo GeoJSON nao encontrado: " + geoJsonPath);
         }
 
-        JsonNode root = objectMapper.readTree(Files.readString(path, StandardCharsets.UTF_8));
-        JsonNode features = root.get("features");
-        if (features == null || !features.isArray()) {
-            throw new IllegalArgumentException("GeoJSON invalido: campo 'features' nao encontrado");
-        }
-        log.info("GeoJSON loaded successfully with {} features", features.size());
-
         int imported = 0;
         int skipped = 0;
 
-        for (JsonNode feature : features) {
-            JsonNode geometry = feature.get("geometry");
-            JsonNode properties = feature.get("properties");
-            if (geometry == null || properties == null) {
-                skipped++;
-                continue;
+        try (JsonParser parser = objectMapper.createParser(path.toFile())) {
+            if (parser.nextToken() != JsonToken.START_OBJECT) {
+                throw new IllegalArgumentException("GeoJSON invalido: objeto raiz nao encontrado");
             }
 
-            String geometryType = geometry.path("type").asText("");
-            if (!"LineString".equals(geometryType)) {
-                skipped++;
-                continue;
+            boolean featuresFound = false;
+
+            while (parser.nextToken() != JsonToken.END_OBJECT) {
+                String fieldName = parser.currentName();
+                if (fieldName == null) {
+                    continue;
+                }
+
+                JsonToken fieldValueToken = parser.nextToken();
+                if (!"features".equals(fieldName)) {
+                    parser.skipChildren();
+                    continue;
+                }
+
+                if (fieldValueToken != JsonToken.START_ARRAY) {
+                    throw new IllegalArgumentException("GeoJSON invalido: campo 'features' nao encontrado");
+                }
+
+                featuresFound = true;
+                log.info("GeoJSON features array found. Starting streaming import.");
+
+                while (parser.nextToken() != JsonToken.END_ARRAY) {
+                    JsonNode feature = objectMapper.readTree(parser);
+                    if (feature == null || feature.isNull()) {
+                        skipped++;
+                        continue;
+                    }
+
+                    JsonNode geometry = feature.get("geometry");
+                    JsonNode properties = feature.get("properties");
+                    if (geometry == null || properties == null) {
+                        skipped++;
+                        continue;
+                    }
+
+                    String geometryType = geometry.path("type").asText("");
+                    if (!"LineString".equals(geometryType)) {
+                        skipped++;
+                        continue;
+                    }
+
+                    long osmWayId = extractOsmWayId(properties, feature);
+                    if (osmWayId <= 0) {
+                        skipped++;
+                        continue;
+                    }
+
+                    String streetName = properties.path("name").asText("");
+                    if (streetName.isBlank()) {
+                        streetName = "OSM WAY " + osmWayId;
+                    }
+
+                    UUID streetId = UUID.nameUUIDFromBytes(("osm-way-" + osmWayId).getBytes(StandardCharsets.UTF_8));
+                    String geometryJson = objectMapper.writeValueAsString(geometry);
+
+                    jdbcTemplate.update(
+                            """
+                            INSERT INTO streets (id, osm_way_id, name, geom)
+                            VALUES (?, ?, ?, ST_SetSRID(ST_GeomFromGeoJSON(?), 4326))
+                            ON CONFLICT (osm_way_id) DO UPDATE
+                            SET name = EXCLUDED.name,
+                                geom = EXCLUDED.geom
+                            """,
+                            streetId,
+                            osmWayId,
+                            streetName,
+                            geometryJson
+                    );
+                    imported++;
+                }
+
+                break;
             }
 
-            long osmWayId = extractOsmWayId(properties, feature);
-            if (osmWayId <= 0) {
-                skipped++;
-                continue;
+            if (!featuresFound) {
+                throw new IllegalArgumentException("GeoJSON invalido: campo 'features' nao encontrado");
             }
-
-            String streetName = properties.path("name").asText("");
-            if (streetName.isBlank()) {
-                streetName = "OSM WAY " + osmWayId;
-            }
-
-            UUID streetId = UUID.nameUUIDFromBytes(("osm-way-" + osmWayId).getBytes(StandardCharsets.UTF_8));
-            String geometryJson = objectMapper.writeValueAsString(geometry);
-
-            jdbcTemplate.update(
-                    """
-                    INSERT INTO streets (id, osm_way_id, name, geom)
-                    VALUES (?, ?, ?, ST_SetSRID(ST_GeomFromGeoJSON(?), 4326))
-                    ON CONFLICT (osm_way_id) DO UPDATE
-                    SET name = EXCLUDED.name,
-                        geom = EXCLUDED.geom
-                    """,
-                    streetId,
-                    osmWayId,
-                    streetName,
-                    geometryJson
-            );
-            imported++;
         }
 
         Integer finalStreetCount = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM streets", Integer.class);
