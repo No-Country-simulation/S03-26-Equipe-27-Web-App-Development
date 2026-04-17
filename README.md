@@ -8,6 +8,14 @@ O objetivo é centralizar análise de tráfego urbano com:
 - geração de insights e exportações,
 - simulação de cenários.
 
+## Demo Temporária
+
+  Este projeto está com uma demonstração temporária publicada em:
+
+  - Frontend: [http://168.138.135.46:5174/](http://168.138.135.46:5174/)
+
+  > Disponibilidade temporária (pode ficar indisponível após alguns dias).
+
 ## Arquitetura
 
 - `backend/`: API Spring Boot (Java 21) com JPA, Flyway e PostgreSQL/PostGIS.
