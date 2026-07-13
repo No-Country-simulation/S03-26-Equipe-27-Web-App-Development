@@ -8,13 +8,23 @@ O objetivo é centralizar análise de tráfego urbano com:
 - geração de insights e exportações,
 - simulação de cenários.
 
-## Demo Temporária
+## Demonstração & Infraestrutura
 
-  Este projeto está com uma demonstração temporária publicada em:
+A aplicação está publicada em uma instância **Oracle Cloud Infrastructure (OCI)**, na região São Paulo:
 
-  - Frontend: [http://168.138.135.46:5174/](http://168.138.135.46:5174/)
+- **Demo:** [http://168.138.135.46:5174/](http://168.138.135.46:5174/)
 
-  > Disponibilidade temporária (pode ficar indisponível após alguns dias).
+O deploy da stack completa é orquestrado via **Docker Compose**, subindo quatro serviços em containers:
+
+| Serviço | Descrição |
+|---|---|
+| `smarttraffic-db` | PostgreSQL + PostGIS (banco geoespacial) |
+| `smarttraffic-backend` | API Spring Boot |
+| `smarttraffic-frontend` | Aplicação web (Node/Vite) |
+| `pgadmin` | Interface de administração do banco |
+
+> Infraestrutura e deploy (provisionamento da instância OCI e configuração do Docker Compose): **André Teixeira**.
+> A demo é mantida em ambiente de avaliação e pode ficar indisponível eventualmente.
 
 ## Arquitetura
 
