@@ -16,6 +16,20 @@ import {
 
 const BASE = "http://localhost:8080/api";
 
+// jsdom's Blob has no text(), while the Blob returned by fetch in Node does; read either one.
+function readBlobText(blob: Blob): Promise<string> {
+  if (typeof blob.text === "function") {
+    return blob.text();
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(blob);
+  });
+}
+
 describe("api client", () => {
   it("loads traffic records", async () => {
     const records = await getTrafficRecords();
@@ -171,14 +185,15 @@ describe("api client", () => {
   });
 
   it("surfaces simulation validation errors", async () => {
-    await expect(generateSimulation({ recordsToGenerate: 501, scenarioName: "Excesso" })).rejects.toMatchObject({
+    await expect(generateSimulation({ recordsToGenerate: 251, scenarioName: "Excesso" })).rejects.toMatchObject({
       status: 400
     } satisfies Partial<ApiError>);
   });
 
   it("downloads csv export as blob", async () => {
     const blob = await getExport("csv");
-    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.type).toBe("text/csv");
+    await expect(readBlobText(blob)).resolves.toBe("id,timestamp\nrec-1,2024-06-17T08:00:00Z\n");
   });
 
   it("surfaces export errors", async () => {
